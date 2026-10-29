@@ -1,7 +1,7 @@
 # Barge-in voice agent
 
 A Python voice agent on PolyAI's Dialog-RSN-1 that handles barge-in properly. When the caller talks over it, it
-stops its voice at once, tells the server how much of the reply was heard, keeps its own record from what was
+stops its voice as soon as the server confirms the interruption, tells the server how much of the reply was heard, keeps its own record from what was
 heard, and doesn't let a slow tool talk over the caller's next question. On speakers, it cancels its own echo so it
 never hears itself and starts over.
 

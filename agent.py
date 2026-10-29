@@ -1,6 +1,6 @@
 """The front desk at the Harborview Inn: a voice agent on Dialog-RSN-1 that handles barge-in properly.
 
-When the caller talks over it, it stops playback at once, tells the server how much of the reply was heard, keeps
+When the caller talks over it, it stops playback as soon as the server confirms it, tells the server how much of the reply was heard, keeps
 its own record from what was heard, and doesn't let a tool that finishes late talk over the caller's new question.
 
     uv run agent.py              # talk to it on your microphone, with headphones on
