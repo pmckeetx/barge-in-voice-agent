@@ -36,11 +36,12 @@ uv run caller.py                        # a scripted call: the caller interrupts
 uv run caller.py --echo 0.3 --before    # speakers leaking into the mic, with no barge-in handling
 uv run caller.py --echo 0.3             # the same room, handled
 uv run caller.py --script booking       # interrupt the agent while a tool is running
+uv run measure.py --runs 3              # repeat the call and summarise how barge-in went (--no-truncate, --aec on)
 uv run agent.py                         # talk to it yourself, with headphones on
 uv run agent.py --speakers              # on laptop speakers, with the echo canceller on
 ```
 
-A variable set in your shell beats `.env`. If you get `HTTP 401`, check `echo $POLY_API_KEY`.
+A variable set in your shell beats `.env`. If the server refuses the connection (HTTP 401), check `echo $POLY_API_KEY`, and set `DIALOG_REALTIME_URL` if your key is for another PolyAI host.
 
 ## Test
 
