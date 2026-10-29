@@ -89,7 +89,7 @@ class Room:
     async def until_agent_done(self, timeout=60):
         end = time.monotonic() + timeout
         await self.until_agent_speaks()
-        while time.monotonic() < end and (self.desk.responding or self.speaker.busy or self.desk.tasks or time.monotonic() - self.last_heard < 1.0):
+        while time.monotonic() < end and (self.desk.responding or self.speaker.busy or self.desk.tasks or time.monotonic() - self.last_heard < 2.0):
             await asyncio.sleep(TICK)
 
 
