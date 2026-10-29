@@ -5,7 +5,7 @@ stops its voice as soon as the server confirms the interruption, tells the serve
 heard, and doesn't let a slow tool talk over the caller's next question. On speakers, it cancels its own echo so it
 never hears itself and starts over.
 
-The walkthrough is the post: [Handle barge-in without your voice agent repeating itself](POST_URL).
+The walkthrough is the post: [Handle barge-in without your voice agent repeating itself](https://www.petermckee.dev/blog/handle-barge-in-without-your-voice-agent-repeating-itself).
 
 ## What's here
 
