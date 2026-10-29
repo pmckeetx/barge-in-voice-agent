@@ -26,6 +26,7 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 pythonpath = [".", "tests"]
 testpaths = ["tests"]
 markers = ["live: calls the real Dialog-RSN-1 API (needs POLYAI_LIVE=1 and POLY_API_KEY)"]
