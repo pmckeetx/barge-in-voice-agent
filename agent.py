@@ -188,6 +188,12 @@ async def call(speakers: bool):
             await asyncio.gather(stream_mic(), desk.listen())
 
 
+def refused(error: websockets.InvalidStatus) -> str:
+    """One line instead of a traceback when the server turns the connection down."""
+    return (f"The server refused the connection (HTTP {error.response.status_code}). Check POLY_API_KEY, and set "
+            f"DIALOG_REALTIME_URL if your key is for a different host than {URL}.")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--speakers", action="store_true", help="you're on speakers, not headphones: cancel the echo")
@@ -195,3 +201,5 @@ if __name__ == "__main__":
         asyncio.run(call(parser.parse_args().speakers))
     except KeyboardInterrupt:
         print("\nHung up.")
+    except websockets.InvalidStatus as error:
+        raise SystemExit(refused(error))

@@ -17,8 +17,9 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
+import websockets
 
-from agent import FrontDesk, connect
+from agent import FrontDesk, connect, refused
 from audio import RATE, EchoCanceller, Speaker
 
 SAMPLES = Path(__file__).parent / "samples"
@@ -93,7 +94,7 @@ class Room:
             await asyncio.sleep(TICK)
 
 
-async def run(script: str, echo_gain: float = 0.0, before: bool = False, aec: bool | None = None) -> Room:
+async def run(script: str, echo_gain: float = 0.0, before: bool = False, aec: bool | None = None, client=None) -> Room:
     """Play one script against the real API and return the room, with everything it heard.
 
     The echo canceller is on when the room has echo (the agent is on speakers), unless aec says otherwise.
@@ -104,7 +105,7 @@ async def run(script: str, echo_gain: float = 0.0, before: bool = False, aec: bo
     if echo:
         speaker.on_played = echo.played
     async with connect() as ws:
-        desk = (Before if before else FrontDesk)(ws, speaker, echo)
+        desk = (client or (Before if before else FrontDesk))(ws, speaker, echo)
         await desk.start()
         room = Room(desk, speaker, echo_gain)
         tasks = [asyncio.create_task(room.run()), asyncio.create_task(desk.listen())]
@@ -143,4 +144,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except websockets.InvalidStatus as error:
+        raise SystemExit(refused(error))
