@@ -8,8 +8,12 @@ It behaves like the real server where barge-in is concerned (checked on api.stud
 - conversation.item.retrieve returns the item as history holds it: a cut reply ends with "-".
 - A caller turn ends after 300 ms of quiet, and gets the next scripted step.
 - A tool call's response completes as soon as the call is sent; the output comes back whenever the client sends it.
+- An end_call whose goodbye is a poly_spoken argument: the call comes first, then the goodbye's audio in the same
+  response, and response.done only once the goodbye has been sent. Talking over the goodbye cancels that response.
 
-Replies stream faster than real time, so the test decides how much "plays" by pulling from the Speaker itself.
+Replies stream faster than real time, so the test decides how much "plays" by pulling from the Speaker itself. With
+pace=True they stream at speaking pace instead, the way the real server sends them, and ready_after makes the
+server slow to send session.created and session.updated, the way a real connection is.
 """
 import asyncio
 import base64
@@ -23,10 +27,16 @@ QUIET_CHUNKS_TO_END = 15  # 15 x 20 ms
 
 
 class FakeRealtime:
-    def __init__(self, steps, caller_lines=None):
-        """steps: what the server does for each response, in order: ("say", text, ms) or ("tool", name, args)."""
+    def __init__(self, steps, caller_lines=None, ready_after=0.0, pace=False):
+        """steps: what the server does for each response, in order: ("say", text, ms), ("tool", name, args),
+        ("goodbye", text, ms) for an end_call with a spoken goodbye, or ("goodbye-stalls", text, ms) for one whose
+        response never finishes."""
         self.steps = list(steps)
         self.caller_lines = list(caller_lines or ["(caller)"] * 10)
+        self.ready_after = ready_after  # seconds before session.created, and again before session.updated
+        self.pace = pace
+        self.ready = False  # True once session.updated has gone out
+        self.audio: list[tuple[bool, bytes]] = []  # every input_audio_buffer.append: (was the session ready?, pcm)
         self.received: list[dict] = []
         self.history: dict[str, dict] = {}  # item_id -> {"text", "ms", "heard_ms"}
         self.url = None
@@ -46,6 +56,7 @@ class FakeRealtime:
     async def handler(self, ws):
         send = lambda event: ws.send(json.dumps(event))  # noqa: E731
         state = {"speaking": False, "quiet": 0, "reply": None, "n": 0}
+        await asyncio.sleep(self.ready_after)
         await send({"type": "session.created", "session": {"poly_session_id": "conversation_test"}})
 
         async def respond():
@@ -63,17 +74,26 @@ class FakeRealtime:
                 await send({"type": "response.done", "response": {"id": rid, "status": "completed", "output": [call]}})
                 return
             text, ms = rest
+            before = []  # items ahead of the spoken message in this response
+            if kind.startswith("goodbye"):
+                fc = {"type": "function_call", "id": f"fc_{state['n']}", "call_id": f"call_{state['n']}", "name": "end_call",
+                      "arguments": json.dumps({"goodbye": text, "reason": "the caller is done"})}
+                await send({"type": "response.function_call_arguments.done", "response_id": rid, "item_id": fc["id"],
+                            "call_id": fc["call_id"], "name": "end_call", "arguments": fc["arguments"]})
+                before = [fc]
             self.history[iid] = {"text": text, "ms": ms, "heard_ms": ms}
-            state["reply"] = {"rid": rid, "iid": iid, "text": text}
+            state["reply"] = {"rid": rid, "iid": iid, "text": text, "before": before}
             for _ in range(ms // 100):  # 100 ms of audio per delta
                 if state["reply"] is None or state["reply"]["rid"] != rid:
                     return  # cancelled by a barge-in
                 await send({"type": "response.output_audio.delta", "response_id": rid, "item_id": iid,
                             "delta": base64.b64encode(np.full(2400, 500, np.int16).tobytes()).decode()})
-                await asyncio.sleep(0.005)
+                await asyncio.sleep(0.1 if self.pace else 0.005)
+            if kind == "goodbye-stalls":
+                return  # the reply never finishes: no transcript, no response.done
             state["reply"] = None
             await send({"type": "response.output_audio_transcript.done", "response_id": rid, "item_id": iid, "transcript": text})
-            await send({"type": "response.done", "response": {"id": rid, "status": "completed", "output": [self.item(iid)]}})
+            await send({"type": "response.done", "response": {"id": rid, "status": "completed", "output": before + [self.item(iid)]}})
 
         async def caller_audio(pcm: bytes):
             loud = np.abs(np.frombuffer(pcm, dtype=np.int16)).max(initial=0) > LOUD
@@ -83,7 +103,7 @@ class FakeRealtime:
                 if reply := state["reply"]:
                     state["reply"] = None
                     await send({"type": "response.output_audio_transcript.done", "response_id": reply["rid"], "item_id": reply["iid"], "transcript": reply["text"]})
-                    await send({"type": "response.done", "response": {"id": reply["rid"], "status": "cancelled", "output": [self.item(reply["iid"])]}})
+                    await send({"type": "response.done", "response": {"id": reply["rid"], "status": "cancelled", "output": reply["before"] + [self.item(reply["iid"])]}})
             elif state["speaking"]:
                 state["quiet"] = 0 if loud else state["quiet"] + 1
                 if state["quiet"] >= QUIET_CHUNKS_TO_END:
@@ -92,15 +112,21 @@ class FakeRealtime:
                     await send({"type": "conversation.item.input_audio_transcription.completed", "item_id": "item_caller", "transcript": self.caller_lines.pop(0)})
                     asyncio.create_task(respond())
 
+        async def updated(session: dict):
+            await asyncio.sleep(self.ready_after)
+            self.ready = True
+            await send({"type": "session.updated", "session": session})
+
         async for raw in ws:
             event = json.loads(raw)
             if event["type"] != "input_audio_buffer.append":
                 self.received.append(event)
             match event["type"]:
                 case "session.update":
-                    await send({"type": "session.updated", "session": event["session"]})
+                    asyncio.create_task(updated(event["session"]))  # keep reading: audio can arrive meanwhile
                 case "input_audio_buffer.append":
-                    await caller_audio(base64.b64decode(event["audio"]))
+                    self.audio.append((self.ready, base64.b64decode(event["audio"])))
+                    await caller_audio(self.audio[-1][1])
                 case "conversation.item.truncate":
                     self.history[event["item_id"]]["heard_ms"] = event["audio_end_ms"]
                     await send({"type": "conversation.item.truncated", "item_id": event["item_id"], "content_index": 0, "audio_end_ms": event["audio_end_ms"]})

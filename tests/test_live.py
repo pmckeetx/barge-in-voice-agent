@@ -25,3 +25,14 @@ async def test_interrupted_reply_is_cut_and_recorded_as_heard():
     assert cut_replies and cut_replies[0].rstrip(" [cutof]").endswith("-")
     assert not any("check-in is from" in c for c in callers)  # the agent never heard itself
     assert len([t for _, who, t in lines if who == "Agent"]) >= 3  # it answered the interruption and "go on"
+
+
+async def test_first_words_are_heard_and_the_goodbye_plays_in_full():
+    from pickup import run, summarise, words
+
+    s = summarise(await run())
+
+    assert words(s["first_line"])[:2] == ["hi", "yes"], s["first_line"]  # said before the session was ready
+    assert s["heard"] >= s["of"] - 2, s["first_line"]  # allow a word or two transcribed differently
+    assert s["goodbye_finished"] and not s["capped"]
+    assert s["goodbye_played_s"] == s["goodbye_received_s"] > 1.0  # it hung up once the whole goodbye had played
