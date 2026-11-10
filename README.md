@@ -67,6 +67,7 @@ uv run pickup.py                        # buffer from pickup, hang up once the g
 uv run pickup.py --before               # drop audio until the session is ready, hang up a second into the goodbye
 uv run pickup.py --talk-over            # the caller cuts in half a second into the goodbye
 uv run pickup.py --runs 5               # repeat it and summarise both edges
+uv run pickup.py --save call.out.wav    # also save the call as the room heard it, both voices
 uv run call.py                          # a call on your microphone: start talking as soon as it runs
 uv run pytest tests/test_call.py        # the offline tests for both edges
 ```

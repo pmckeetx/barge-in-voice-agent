@@ -5,6 +5,7 @@ at the end. No microphone or speakers: it plays samples/ through the simulated r
     uv run pickup.py --before       # drop audio until the session is ready, hang up a second into the goodbye
     uv run pickup.py --talk-over    # the caller cuts in half a second into the goodbye
     uv run pickup.py --runs 5       # repeat the call and count what was heard at each edge
+    uv run pickup.py --save call.out.wav   # also save the call as the room heard it, both voices
 """
 import argparse
 import asyncio
@@ -13,11 +14,12 @@ import json
 import re
 import statistics
 import time
+import wave
 
 import websockets
 
 from agent import FrontDesk, connect, refused
-from audio import BYTES_PER_MS, Speaker
+from audio import BYTES_PER_MS, RATE, Speaker
 from call import Call
 from caller import Room
 
@@ -86,7 +88,7 @@ def lost_at_start(transcript: str) -> int:
 async def run(before: bool = False, talk_over: bool = False) -> Call:
     speaker = Speaker()
     desk = (CountedNaiveCall if before else CountedCall)(None, speaker)
-    room = Room(desk, speaker, echo_gain=0.0)
+    room = desk.room = Room(desk, speaker, echo_gain=0.0)
     pickup = time.monotonic()
     tasks = [asyncio.create_task(room.run())]
     room.say("pickup")  # the caller starts talking the moment the line opens
@@ -133,13 +135,21 @@ async def main():
     parser.add_argument("--before", action="store_true", help="drop audio until ready, hang up after a fixed second")
     parser.add_argument("--talk-over", action="store_true", help="talk over the goodbye")
     parser.add_argument("--runs", type=int, default=1)
+    parser.add_argument("--save", help="write the call as the room heard it, both voices, to this WAV (the last run)")
     args = parser.parse_args()
     results = []
     for i in range(args.runs):
         if args.runs > 1:
             print(f"\n=== run {i + 1} ===", flush=True)
-        s = summarise(await run(args.before, args.talk_over))
+        desk = await run(args.before, args.talk_over)
+        s = summarise(desk)
         results.append(s)
+        if args.save:
+            with wave.open(args.save, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(RATE)
+                w.writeframes(bytes(desk.room.recording))
         print(f"first line: lost {s['lost']} of {s['of']} words at the start (session ready {s['ready_s']:.2f} s after pickup); "
               f"goodbye: played {s['goodbye_played_s']:.1f} s of \"{s['goodbye']}\", "
               + ("all of it" if s["goodbye_finished"] else "then hung up while the server was still sending it")
