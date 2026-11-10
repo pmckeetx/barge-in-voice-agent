@@ -25,7 +25,7 @@ LINE = "Hi, yes, I'm calling about my booking for Friday. The surname's Okafor."
 
 
 class NaiveCall(Call):
-    """The usual client: drops the caller's audio until the session is ready, and hangs up a fixed second after
+    """The old client: drops the caller's audio until the session is ready, and hangs up a fixed second after
     the agent calls end_call."""
 
     async def send_audio(self, pcm: bytes):
@@ -146,7 +146,7 @@ async def main():
               + (", capped" if s["capped"] else ""), flush=True)
     if args.runs > 1:
         lost = [s["lost"] for s in results]
-        print(f"\n{args.runs} runs: first words lost in {sum(n > 0 for n in lost)} (0 to {max(lost)} words, median {statistics.median(lost)}); "
+        print(f"\n{args.runs} runs: first words lost in {sum(n > 0 for n in lost)} ({min(lost)} to {max(lost)} words, median {statistics.median(lost):g}); "
               f"session ready a median {statistics.median(s['ready_s'] for s in results):.2f} s after pickup; "
               f"goodbye played in full in {sum(s['goodbye_finished'] and s['goodbye_played_s'] == s['goodbye_received_s'] for s in results)}, "
               f"median {statistics.median(s['goodbye_played_s'] for s in results):.1f} s played")
