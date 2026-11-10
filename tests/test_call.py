@@ -61,9 +61,18 @@ async def caller_says(desk):
         await desk.send_audio(QUIET)
 
 
-async def open_call(fake, monkeypatch, speaker):
+class DrainCall(Call):
+    """Sleeps a second after end_call, then hangs up as soon as the speaker is empty."""
+
+    async def hang_up_after_goodbye(self):
+        await asyncio.sleep(1.0)
+        await self.speaker.drain()
+        await self.hang_up()
+
+
+async def open_call(fake, monkeypatch, speaker, client=Call):
     monkeypatch.setattr(agent, "URL", fake.url)
-    desk = Call(None, speaker)
+    desk = client(None, speaker)
     desk.ws = await connect()
     await desk.start()
     return desk, asyncio.create_task(desk.listen())
@@ -123,6 +132,39 @@ async def test_hang_up_waits_until_the_goodbye_has_played(monkeypatch):
         assert not speaker.busy
         assert fake.sent("response.create") == []  # nothing new was asked for after the goodbye
         await until(lambda: listener.done())  # the socket is closed, so listen() has returned
+
+
+async def test_a_fixed_sleep_cuts_the_goodbye(monkeypatch):
+    from fake_realtime import FakeRealtime
+
+    async with FakeRealtime([("goodbye", GOODBYE, 4000)], pace=True) as fake:
+        speaker = Speaker()
+        desk, listener = await open_call(fake, monkeypatch, speaker, NaiveCall)
+        card = asyncio.create_task(play(speaker))
+        await caller_says(desk)
+        await asyncio.wait_for(desk.hung_up.wait(), 5)
+        card.cancel()
+
+        assert speaker.played["item_1"] < 1500 * BYTES_PER_MS  # about a second of a four-second goodbye
+
+
+@pytest.mark.parametrize("client", [Call, DrainCall])
+async def test_a_pause_in_the_stream_isnt_the_end_of_the_goodbye(monkeypatch, client):
+    from fake_realtime import FakeRealtime
+
+    async with FakeRealtime([("goodbye", GOODBYE, 3000)], pace=True, stall=(1500, 0.5)) as fake:
+        speaker = Speaker()
+        desk, listener = await open_call(fake, monkeypatch, speaker, client)
+        card = asyncio.create_task(play(speaker))
+        await caller_says(desk)
+        await asyncio.wait_for(desk.hung_up.wait(), 6)
+        card.cancel()
+
+        played = speaker.played["item_1"] // BYTES_PER_MS
+        if client is Call:
+            assert played == 3000  # it waited for response.done, so the pause didn't matter
+        else:
+            assert played < 2000  # the speaker ran dry during the pause, and that looked like the end
 
 
 async def test_hang_up_gives_up_when_the_goodbye_never_finishes(monkeypatch):

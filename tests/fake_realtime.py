@@ -8,12 +8,13 @@ It behaves like the real server where barge-in is concerned (checked on api.stud
 - conversation.item.retrieve returns the item as history holds it: a cut reply ends with "-".
 - A caller turn ends after 300 ms of quiet, and gets the next scripted step.
 - A tool call's response completes as soon as the call is sent; the output comes back whenever the client sends it.
-- An end_call whose goodbye is a poly_spoken argument: the call comes first, then the goodbye's audio in the same
-  response, and response.done only once the goodbye has been sent. Talking over the goodbye cancels that response.
+- An end_call whose goodbye is a poly_spoken argument: the goodbye's audio and the call arrive together in one
+  response (the first audio just ahead of the call), and response.done only once the goodbye has been sent.
+  Talking over the goodbye cancels that response (checked 10 November 2026).
 
 Replies stream faster than real time, so the test decides how much "plays" by pulling from the Speaker itself. With
-pace=True they stream at speaking pace instead, the way the real server sends them, and ready_after makes the
-server slow to send session.created and session.updated, the way a real connection is.
+pace=True they stream at speaking pace instead, a little ahead of playback the way the real server sends them, and
+ready_after makes the server slow to send session.created and session.updated, the way a real connection is.
 """
 import asyncio
 import base64
@@ -24,17 +25,22 @@ import websockets
 
 LOUD = 1000
 QUIET_CHUNKS_TO_END = 15  # 15 x 20 ms
+# Paced timing, from 10 goodbyes on api.studio.poly.ai, 10 November 2026: the server stays 83 to 303 ms ahead of
+# playback, and response.done comes 312 to 477 ms after the last audio delta.
+LEAD_MS = 300
+DONE_AFTER_S = 0.4
 
 
 class FakeRealtime:
-    def __init__(self, steps, caller_lines=None, ready_after=0.0, pace=False):
+    def __init__(self, steps, caller_lines=None, ready_after=0.0, pace=False, stall=None):
         """steps: what the server does for each response, in order: ("say", text, ms), ("tool", name, args),
         ("goodbye", text, ms) for an end_call with a spoken goodbye, or ("goodbye-stalls", text, ms) for one whose
-        response never finishes."""
+        response never finishes. stall=(ms, seconds) pauses every reply's audio that far in."""
         self.steps = list(steps)
         self.caller_lines = list(caller_lines or ["(caller)"] * 10)
         self.ready_after = ready_after  # seconds before session.created, and again before session.updated
         self.pace = pace
+        self.stall = stall
         self.ready = False  # True once session.updated has gone out
         self.audio: list[tuple[bool, bytes]] = []  # every input_audio_buffer.append: (was the session ready?, pcm)
         self.received: list[dict] = []
@@ -75,22 +81,33 @@ class FakeRealtime:
                 return
             text, ms = rest
             before = []  # items ahead of the spoken message in this response
+            fc = None
             if kind.startswith("goodbye"):
                 fc = {"type": "function_call", "id": f"fc_{state['n']}", "call_id": f"call_{state['n']}", "name": "end_call",
                       "arguments": json.dumps({"goodbye": text, "reason": "the caller is done"})}
-                await send({"type": "response.function_call_arguments.done", "response_id": rid, "item_id": fc["id"],
-                            "call_id": fc["call_id"], "name": "end_call", "arguments": fc["arguments"]})
                 before = [fc]
             self.history[iid] = {"text": text, "ms": ms, "heard_ms": ms}
             state["reply"] = {"rid": rid, "iid": iid, "text": text, "before": before}
-            for _ in range(ms // 100):  # 100 ms of audio per delta
+            for n in range(ms // 100):  # 100 ms of audio per delta
                 if state["reply"] is None or state["reply"]["rid"] != rid:
                     return  # cancelled by a barge-in
                 await send({"type": "response.output_audio.delta", "response_id": rid, "item_id": iid,
                             "delta": base64.b64encode(np.full(2400, 500, np.int16).tobytes()).decode()})
-                await asyncio.sleep(0.1 if self.pace else 0.005)
+                if n == 0 and fc:  # the goodbye's first audio arrives just ahead of the call itself
+                    await send({"type": "response.function_call_arguments.done", "response_id": rid, "item_id": fc["id"],
+                                "call_id": fc["call_id"], "name": "end_call", "arguments": fc["arguments"]})
+                if self.stall and (n + 1) * 100 == self.stall[0]:
+                    await asyncio.sleep(self.stall[1])  # the stream pauses, as on a slow network
+                if not self.pace:
+                    await asyncio.sleep(0.005)
+                elif n >= LEAD_MS // 100 - 1:
+                    await asyncio.sleep(0.1)
             if kind == "goodbye-stalls":
                 return  # the reply never finishes: no transcript, no response.done
+            if self.pace:
+                await asyncio.sleep(DONE_AFTER_S)
+                if state["reply"] is None or state["reply"]["rid"] != rid:
+                    return
             state["reply"] = None
             await send({"type": "response.output_audio_transcript.done", "response_id": rid, "item_id": iid, "transcript": text})
             await send({"type": "response.done", "response": {"id": rid, "status": "completed", "output": before + [self.item(iid)]}})

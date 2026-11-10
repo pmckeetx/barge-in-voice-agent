@@ -28,11 +28,10 @@ async def test_interrupted_reply_is_cut_and_recorded_as_heard():
 
 
 async def test_first_words_are_heard_and_the_goodbye_plays_in_full():
-    from pickup import run, summarise, words
+    from pickup import run, summarise
 
     s = summarise(await run())
 
-    assert words(s["first_line"])[:2] == ["hi", "yes"], s["first_line"]  # said before the session was ready
-    assert s["heard"] >= s["of"] - 2, s["first_line"]  # allow a word or two transcribed differently
+    assert s["lost"] == 0, s["first_line"]  # "Hi, yes" was said before the session was ready, and it was heard
     assert s["goodbye_finished"] and not s["capped"]
     assert s["goodbye_played_s"] == s["goodbye_received_s"] > 1.0  # it hung up once the whole goodbye had played

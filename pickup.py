@@ -9,6 +9,7 @@ at the end. No microphone or speakers: it plays samples/ through the simulated r
 import argparse
 import asyncio
 import base64
+import json
 import re
 import statistics
 import time
@@ -24,8 +25,8 @@ LINE = "Hi, yes, I'm calling about my booking for Friday. The surname's Okafor."
 
 
 class NaiveCall(Call):
-    """The usual client: drops the caller's audio until the session is ready, and hangs up a second after the
-    goodbye starts, once the speaker has played what it has."""
+    """The usual client: drops the caller's audio until the session is ready, and hangs up a fixed second after
+    the agent calls end_call."""
 
     async def send_audio(self, pcm: bytes):
         if self.live and not self.hung_up.is_set():
@@ -33,23 +34,35 @@ class NaiveCall(Call):
 
     async def hang_up_after_goodbye(self):
         await asyncio.sleep(1.0)
-        await self.speaker.drain()
         await self.hang_up()
 
 
 class Counted:
-    """Counts the goodbye's audio as it arrives, so the summary can say how much of it played."""
+    """Counts each reply's audio as it arrives, so the summary can say how much of the goodbye played. Some of the
+    goodbye's audio arrives before the end_call event does, so it's counted per response."""
 
-    goodbye_item = None
-    goodbye_received = 0
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.received: dict[str, list] = {}  # response_id -> [item_id, bytes]
+        self.goodbye_rid = None
+        self.goodbye_text = ""
 
     async def handle(self, event: dict):
+        if event["type"] == "response.output_audio.delta":
+            got = self.received.setdefault(event["response_id"], [event["item_id"], 0])
+            got[1] += len(base64.b64decode(event["delta"]))
         if event["type"] == "response.function_call_arguments.done" and event["name"] == "end_call":
-            self.goodbye_item, self.goodbye_received = None, 0  # a new goodbye, after one the caller talked over
-        if event["type"] == "response.output_audio.delta" and self.goodbye and event["response_id"] == self.goodbye["response_id"]:
-            self.goodbye_item = event["item_id"]
-            self.goodbye_received += len(base64.b64decode(event["delta"]))
+            self.goodbye_rid = event["response_id"]
+            self.goodbye_text = json.loads(event["arguments"]).get("goodbye", "")
         await super().handle(event)
+
+    @property
+    def goodbye_item(self):
+        return self.received.get(self.goodbye_rid, [None, 0])[0] if self.goodbye_rid else None
+
+    @property
+    def goodbye_received(self):
+        return self.received.get(self.goodbye_rid, [None, 0])[1] if self.goodbye_rid else 0
 
 
 class CountedCall(Counted, Call):
@@ -62,6 +75,12 @@ class CountedNaiveCall(Counted, NaiveCall):
 
 def words(text: str) -> list[str]:
     return re.findall(r"[a-z']+", text.lower().replace("’", "'"))
+
+
+def lost_at_start(transcript: str) -> int:
+    """How many words of LINE come before the first one the transcript has: the words said before anyone listened."""
+    line, got = words(LINE), words(transcript)
+    return line.index(got[0]) if got and got[0] in line else len(line)
 
 
 async def run(before: bool = False, talk_over: bool = False) -> Call:
@@ -99,12 +118,13 @@ def summarise(desk: Call) -> dict:
     return {
         "ready_s": round(desk.timings["ready"], 2),
         "first_line": callers[0] if callers else "",
-        "heard": sum(w in set(words(callers[0] if callers else "")) for w in words(LINE)),
+        "lost": lost_at_start(callers[0] if callers else ""),
         "of": len(words(LINE)),
         "goodbye_played_s": round(played / 1000, 2),
         "goodbye_received_s": round(desk.goodbye_received // BYTES_PER_MS / 1000, 2),
         "goodbye_finished": desk.goodbye_spoken.is_set(),
         "capped": any("hanging up anyway" in text for _, _, text in desk.lines),
+        "goodbye": desk.goodbye_text,
     }
 
 
@@ -120,14 +140,13 @@ async def main():
             print(f"\n=== run {i + 1} ===", flush=True)
         s = summarise(await run(args.before, args.talk_over))
         results.append(s)
-        print(f"first line: heard {s['heard']} of {s['of']} words (session ready {s['ready_s']:.2f} s after pickup); "
-              f"goodbye: played {s['goodbye_played_s']:.1f} s, "
+        print(f"first line: lost {s['lost']} of {s['of']} words at the start (session ready {s['ready_s']:.2f} s after pickup); "
+              f"goodbye: played {s['goodbye_played_s']:.1f} s of \"{s['goodbye']}\", "
               + ("all of it" if s["goodbye_finished"] else "then hung up while the server was still sending it")
               + (", capped" if s["capped"] else ""), flush=True)
     if args.runs > 1:
-        heard = [s["heard"] for s in results]
-        print(f"\n{args.runs} runs: first line heard in full in {sum(h == results[0]['of'] for h in heard)}, "
-              f"median {statistics.median(heard)} of {results[0]['of']} words; "
+        lost = [s["lost"] for s in results]
+        print(f"\n{args.runs} runs: first words lost in {sum(n > 0 for n in lost)} (0 to {max(lost)} words, median {statistics.median(lost)}); "
               f"session ready a median {statistics.median(s['ready_s'] for s in results):.2f} s after pickup; "
               f"goodbye played in full in {sum(s['goodbye_finished'] and s['goodbye_played_s'] == s['goodbye_received_s'] for s in results)}, "
               f"median {statistics.median(s['goodbye_played_s'] for s in results):.1f} s played")
