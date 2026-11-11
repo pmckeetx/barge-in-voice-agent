@@ -47,8 +47,32 @@ A variable set in your shell beats `.env`. If the server refuses the connection 
 
 ```bash
 uv run pytest                           # offline: a fake realtime server, no key needed
-POLYAI_LIVE=1 uv run pytest -m live     # one scripted call against the real API
+POLYAI_LIVE=1 uv run pytest -m live     # scripted calls against the real API
 ```
+
+## Start and end a call without clipping a word
+
+The second post, [Start and end a voice agent call in Python without clipping a word](https://www.petermckee.dev/blog/start-and-end-a-voice-agent-call-in-python-without-clipping),
+adds two files and leaves the ones above alone (the barge-in post's code is at the tag `barge-in-post`).
+
+`call.py` is the front desk with both edges of a call handled. It holds the caller's audio from the moment the line
+opens (up to 5 s) and sends it, in order, once `session.updated` arrives. It gives the agent an `end_call` tool
+whose goodbye the server speaks, and it hangs up only when that goodbye's response is done and the speaker has
+played the last of it, or after 8 s if it never finishes. If the caller talks over the goodbye, the line stays open.
+`pickup.py` is a scripted caller that starts talking on the first frame, through the same simulated room as
+`caller.py`, and counts what was heard at each edge.
+
+```bash
+uv run pickup.py                        # buffer from pickup, hang up once the goodbye has played
+uv run pickup.py --before               # drop audio until the session is ready, hang up a second into the goodbye
+uv run pickup.py --talk-over            # the caller cuts in half a second into the goodbye
+uv run pickup.py --runs 5               # repeat it and summarise both edges
+uv run pickup.py --save call.out.wav    # also save the call as the room heard it, both voices
+uv run call.py                          # a call on your microphone: start talking as soon as it runs
+uv run pytest tests/test_call.py        # the offline tests for both edges
+```
+
+`make_samples.sh` shows how the caller's lines in `samples/` were made with macOS `say`.
 
 ## License
 
