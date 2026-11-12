@@ -52,7 +52,7 @@ POLYAI_LIVE=1 uv run pytest -m live     # scripted calls against the real API
 
 ## Start and end a call without clipping a word
 
-The second post, [Start and end a voice agent call in Python without clipping a word](https://www.petermckee.dev/blog/start-and-end-a-voice-agent-call-in-python-without-clipping),
+The second post, [Start and end a voice agent call in Python without clipping a word](https://dev.to/pmckeetx/start-and-end-a-voice-agent-call-in-python-without-clipping-a-word-330i),
 adds two files and leaves the ones above alone (the barge-in post's code is at the tag `barge-in-post`).
 
 `call.py` is the front desk with both edges of a call handled. It holds the caller's audio from the moment the line
