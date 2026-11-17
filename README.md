@@ -72,7 +72,32 @@ uv run call.py                          # a call on your microphone: start talki
 uv run pytest tests/test_call.py        # the offline tests for both edges
 ```
 
-`make_samples.sh` shows how the caller's lines in `samples/` were made with macOS `say`.
+## Measure barge-in from a recording
+
+The third post, Measure barge-in stop time from a stereo call recording in Python (link to come), adds three files
+and changes `caller.py` only to feed the recorder and give each line an intent (the second post's code is at the
+tag `start-and-end-post`).
+
+`recorder.py` writes a scripted call as a stereo WAV on the playback clock: the caller on the left, as the agent
+heard them, and the agent on the right, as the caller heard it, both from the same 20 ms tick. A JSON file beside
+it says what the caller said, when, and what they meant: a barge-in, a backchannel or background noise. `record.py`
+runs a script through that recorder and prints, for each overlap, the stop the recording shows beside when
+`speech_started` arrived. `bargein.py` scores any 16-bit two-channel WAV, with the standard library only: for each
+time the caller starts while the agent is talking, how long the agent kept talking, and, with labels, whether that
+was a stop, a missed barge-in, a backchannel ignored or a false stop.
+
+```bash
+uv run record.py --script check-in --runs 20    # "Is there parking?" 4 s into the check-in rundown
+uv run record.py --script stop --runs 10        # "Stop." (also wait, mm-hmm and tv)
+uv run record.py --format pcmu                  # the caller on a phone line: 8 kHz G.711 mu-law
+uv run bargein.py runs/*.wav                    # score every recording, with a table per line
+uv run bargein.py call.wav --caller right       # someone else's recording, with the agent on the left
+uv run bargein.py call.wav --labels call.csv    # with your own labels: onset_s,intent
+uv run pytest tests/test_bargein.py tests/test_recorder.py
+```
+
+`make_samples.sh` shows how the caller's lines in `samples/` were made with macOS `say`. `mm-hmm.wav` and `tv.wav`
+come from [refund-voice-agent](https://github.com/pmckeetx/refund-voice-agent).
 
 ## License
 
