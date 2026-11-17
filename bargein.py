@@ -11,6 +11,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import statistics
 import sys
 import wave
@@ -22,12 +23,13 @@ FRAME_S = 0.02  # 20 ms frames
 FLOOR_DB = -70.0  # treat anything quieter than this as silence, even on a perfectly clean channel
 ON_DB = 16  # speech starts on a frame this far above the channel's noise floor
 OFF_DB = 10  # and ends only once frames fall below this lower level
-# How much quiet ends a channel's speech. The agent's has to outlast its longest pause between sentences, and stay
-# shorter than the time it takes to answer the caller once it has stopped.
-HANGOVER_S = {"caller": 0.4, "agent": 0.8}
+# How much quiet ends a channel's speech. The agent's has to outlast its longest pause between sentences and stay
+# shorter than its quickest answer after a stop. On api.studio.poly.ai's server voice (17 November 2026) the
+# longest pause inside a reply was 0.36 s, and the shortest quiet after a cut was 0.72 s.
+HANGOVER_S = {"caller": 0.4, "agent": 0.5}
 LEAD_S = 0.2  # the agent must have been talking this long when the caller starts, or it's the agent cutting in
 REACT_S = 0.15  # no detector reacts faster: an agent that goes quiet sooner was finishing anyway
-MISS_S = 2.0  # still talking this long after the caller started: it didn't stop
+MISS_S = 2.0  # still talking this long after the caller finished: it didn't stop
 STOP = {"barge-in", "turn"}  # the intents that should stop the agent; backchannel and background should not
 
 
@@ -92,12 +94,12 @@ def segments(db: list[float], hangover_s: float) -> list[tuple[float, float]]:
 def score(file: str, caller: list[tuple[float, float]], agent: list[tuple[float, float]], labels: list[dict]) -> list[Overlap]:
     """One Overlap for every time the caller started while the agent was already talking."""
     out, unused = [], sorted(labels, key=lambda label: label["onset_s"])
-    for onset, _ in caller:
+    for onset, end in caller:
         talking = next(((a, b) for a, b in agent if a + LEAD_S <= onset < b), None)
         if not talking:
             continue
         talked = round(talking[1] - onset, 2)
-        result = "ended" if talked < REACT_S else "stopped" if talked <= MISS_S else "talked on"
+        result = "ended" if talked < REACT_S else "stopped" if talking[1] <= end + MISS_S else "talked on"
         # A label belongs to the first caller burst that starts at or up to a second after it.
         label = next((x for x in unused if x["onset_s"] - FRAME_S <= onset <= x["onset_s"] + 1.0), None)
         if label:
@@ -129,16 +131,18 @@ def analyse(wav: Path, caller: str = "left", labels_csv: str | None = None, agen
 
 def table(overlaps: list[Overlap]) -> str:
     """One row per kind of line: how many stopped the agent, how fast, and how many shouldn't have."""
-    rows = [f"{'line':12}{'intent':13}{'calls':>6}{'stopped':>9}  {'median':>8}  {'range':16}{'false stops':>12}{'missed':>8}"]
+    rows = [f"{'recordings':16}{'line':10}{'intent':13}{'calls':>6}{'stopped':>9}  {'median':>8}  {'range':16}"
+            f"{'false stops':>12}{'missed':>8}"]
     groups: dict[tuple, list[Overlap]] = {}
     for o in overlaps:
-        groups.setdefault((o.line or "?", o.intent or "?"), []).append(o)
-    for (line, intent), group in groups.items():
+        name = re.sub(r"-\d+$", "", Path(o.file).stem)  # runs/stop-03.wav and runs/stop-04.wav are both "stop"
+        groups.setdefault((name, o.line or "?", o.intent or "?"), []).append(o)
+    for (name, line, intent), group in groups.items():
         times = [o.talked_s for o in group if o.result == "stopped"]
         median = f"{statistics.median(times):.2f} s" if times else "-"
         spread = f"{min(times):.2f} to {max(times):.2f} s" if times else "-"
         count = lambda v: sum(o.verdict == v for o in group)  # noqa: E731
-        rows.append(f"{line:12}{intent:13}{len(group):>6}{len(times):>9}  {median:>8}  {spread:16}"
+        rows.append(f"{name:16}{line:10}{intent:13}{len(group):>6}{len(times):>9}  {median:>8}  {spread:16}"
                     f"{count('false stop'):>12}{count('missed'):>8}")
     return "\n".join(rows)
 
