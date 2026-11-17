@@ -16,7 +16,9 @@ Replies stream faster than real time, so the test decides how much "plays" by pu
 pace=True they stream at speaking pace instead, a little ahead of playback the way the real server sends them, and
 ready_after makes the server slow to send session.created and session.updated, the way a real connection is.
 confirm_ms holds speech_started back while a reply is playing, the way the model confirms the sound is the caller
-first (about 0.8 s on api.studio.poly.ai, October 2026). A sound that has ended by then, like "mm-hmm", isn't a turn.
+first (about 0.8 s on api.studio.poly.ai, October 2026). A sound that has ended by then isn't a turn. That stands
+in for the model telling "mm-hmm" from "Stop.": the real server goes by what was said (17 November 2026: "mm-hmm"
+cut nothing in 10 calls, a shorter "Stop." cut the reply in 10 of 10), so the fake drops a short "Stop." too.
 """
 import asyncio
 import base64
