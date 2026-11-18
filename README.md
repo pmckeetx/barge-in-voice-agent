@@ -74,7 +74,7 @@ uv run pytest tests/test_call.py        # the offline tests for both edges
 
 ## Measure barge-in from a recording
 
-The third post, Measure barge-in stop time from a stereo call recording in Python (link to come), adds three files
+The third post, [Measure barge-in stop time from a stereo call recording in Python](https://dev.to/pmckeetx/measure-barge-in-stop-time-from-a-stereo-call-recording-in-python-4pk0), adds three files
 and changes `caller.py` only to feed the recorder and give each line an intent (the second post's code is at the
 tag `start-and-end-post`).
 
