@@ -15,6 +15,11 @@ It behaves like the real server where barge-in is concerned (checked on api.stud
 Replies stream faster than real time, so the test decides how much "plays" by pulling from the Speaker itself. With
 pace=True they stream at speaking pace instead, a little ahead of playback the way the real server sends them, and
 ready_after makes the server slow to send session.created and session.updated, the way a real connection is.
+confirm_ms holds speech_started back while a reply is playing, the way the model confirms the sound is the caller
+first (about 0.8 s on api.studio.poly.ai, October 2026). A sound that has ended by then isn't a turn. That stands
+in for the model telling "mm-hmm" from "Stop.": the real server goes by what was said (17 November 2026: "mm-hmm"
+cut nothing in 10 calls, a "Stop." clip of the same length cut the reply in 10 of 10), so the fake drops a
+"Stop." too.
 """
 import asyncio
 import base64
@@ -32,7 +37,7 @@ DONE_AFTER_S = 0.4
 
 
 class FakeRealtime:
-    def __init__(self, steps, caller_lines=None, ready_after=0.0, pace=False, stall=None):
+    def __init__(self, steps, caller_lines=None, ready_after=0.0, pace=False, stall=None, confirm_ms=0):
         """steps: what the server does for each response, in order: ("say", text, ms), ("tool", name, args),
         ("goodbye", text, ms) for an end_call with a spoken goodbye, or ("goodbye-stalls", text, ms) for one whose
         response never finishes. stall=(ms, seconds) pauses every reply's audio that far in."""
@@ -41,6 +46,7 @@ class FakeRealtime:
         self.ready_after = ready_after  # seconds before session.created, and again before session.updated
         self.pace = pace
         self.stall = stall
+        self.confirm_ms = confirm_ms
         self.ready = False  # True once session.updated has gone out
         self.audio: list[tuple[bool, bytes]] = []  # every input_audio_buffer.append: (was the session ready?, pcm)
         self.received: list[dict] = []
@@ -61,7 +67,7 @@ class FakeRealtime:
 
     async def handler(self, ws):
         send = lambda event: ws.send(json.dumps(event))  # noqa: E731
-        state = {"speaking": False, "quiet": 0, "reply": None, "n": 0}
+        state = {"speaking": False, "quiet": 0, "reply": None, "n": 0, "confirming": None}
         await asyncio.sleep(self.ready_after)
         await send({"type": "session.created", "session": {"poly_session_id": "conversation_test"}})
 
@@ -114,7 +120,16 @@ class FakeRealtime:
 
         async def caller_audio(pcm: bytes):
             loud = np.abs(np.frombuffer(pcm, dtype=np.int16)).max(initial=0) > LOUD
-            if loud and not state["speaking"]:
+            if loud and state["confirming"] is None and not state["speaking"]:
+                state["confirming"] = 0  # the caller started: 20 ms chunks since then
+            if state["confirming"] is not None:
+                state["since_loud"] = 0 if loud else state.get("since_loud", 0) + 1
+                if state["reply"] and state["confirming"] < self.confirm_ms // 20:
+                    state["confirming"] += 1
+                    return
+                state["confirming"] = None
+                if state["since_loud"] >= QUIET_CHUNKS_TO_END:
+                    return  # a short sound that ended before the check did, like "mm-hmm": not a turn
                 state["speaking"], state["quiet"] = True, 0
                 await send({"type": "input_audio_buffer.speech_started", "audio_start_ms": 0})
                 if reply := state["reply"]:

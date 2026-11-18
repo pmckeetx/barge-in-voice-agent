@@ -54,6 +54,8 @@ async def look_up_booking(surname: str) -> dict:
 
 
 class FrontDesk:
+    INPUT_FORMAT = {"type": "audio/pcm", "rate": 24000}  # what send_audio() sends
+
     def __init__(self, ws, speaker: Speaker, echo: EchoCanceller | None = None):
         self.ws = ws
         self.speaker = speaker
@@ -75,7 +77,7 @@ class FrontDesk:
                 "type": "realtime",
                 "instructions": INSTRUCTIONS,
                 "tools": TOOLS,
-                "audio": {"input": {"format": {"type": "audio/pcm", "rate": 24000}, "turn_detection": {"type": "server_vad"}}},
+                "audio": {"input": {"format": self.INPUT_FORMAT, "turn_detection": {"type": "server_vad"}}},
             },
         })
         updated = json.loads(await self.ws.recv())

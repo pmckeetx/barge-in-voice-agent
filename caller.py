@@ -21,17 +21,23 @@ import websockets
 
 from agent import FrontDesk, connect, refused
 from audio import RATE, EchoCanceller, Speaker
+from recorder import StereoRecorder
 
 SAMPLES = Path(__file__).parent / "samples"
 TICK = 0.02
 CHUNK = int(RATE * TICK) * 2
 ECHO_DELAY_MS = 40  # speaker to mic, through the device buffers and the air
 
-# Each step: the line the caller says, and when. None waits for the agent to finish its reply first; a number
-# interrupts that reply that many seconds after it starts.
+# Each step: the line the caller says, when, and what they mean by it. None waits for the agent to finish its reply
+# first; a number talks over that reply that many seconds after it starts. A barge-in should stop the agent; a
+# backchannel ("mm-hmm") and background noise (a TV in the room) should not.
 SCRIPTS = {
-    "check-in": [("check-in", None), ("parking", 4.0), ("go-on", None)],
-    "booking": [("booking", None), ("never-mind", 0.3)],
+    "check-in": [("check-in", None, "turn"), ("parking", 4.0, "barge-in"), ("go-on", None, "turn")],
+    "booking": [("booking", None, "turn"), ("never-mind", 0.3, "barge-in")],
+    "stop": [("check-in", None, "turn"), ("stop", 4.0, "barge-in")],
+    "wait": [("check-in", None, "turn"), ("wait", 4.0, "barge-in")],
+    "mm-hmm": [("check-in", None, "turn"), ("mm-hmm", 1.2, "backchannel")],
+    "tv": [("check-in", None, "turn"), ("tv", 1.2, "background")],
 }
 
 
@@ -56,8 +62,8 @@ def read(name: str) -> bytes:
 class Room:
     """Plays the agent's audio at real time and builds what the caller's microphone hears."""
 
-    def __init__(self, desk: FrontDesk, speaker: Speaker, echo_gain: float):
-        self.desk, self.speaker, self.echo_gain = desk, speaker, echo_gain
+    def __init__(self, desk: FrontDesk, speaker: Speaker, echo_gain: float, recorder: StereoRecorder | None = None):
+        self.desk, self.speaker, self.echo_gain, self.recorder = desk, speaker, echo_gain, recorder
         self.voice = bytearray()  # the caller's line, still to say
         self.air = deque([np.zeros(CHUNK // 2)] * (ECHO_DELAY_MS // 20))  # sound takes a moment to reach the mic
         self.last_heard = 0.0  # when the agent was last audible
@@ -72,14 +78,19 @@ class Room:
             said, self.voice[:] = bytes(self.voice[:CHUNK]).ljust(CHUNK, b"\0"), self.voice[CHUNK:]
             self.air.append(played.astype(np.float32))
             mic = np.frombuffer(said, dtype=np.int16).astype(np.float32) + self.air.popleft() * self.echo_gain
-            await self.desk.send_audio(mic.clip(-32768, 32767).astype(np.int16).tobytes())
+            mic = mic.clip(-32768, 32767).astype(np.int16).tobytes()
+            if self.recorder:
+                self.recorder.add(mic, played.tobytes())  # both sides, from the same tick
+            await self.desk.send_audio(mic)
             both = played.astype(np.float32) + np.frombuffer(said, dtype=np.int16)
             self.recording.extend(both.clip(-32768, 32767).astype(np.int16).tobytes())
             n += 1
             await asyncio.sleep(max(0, start + n * TICK - time.monotonic()))  # keep real time
 
-    def say(self, name: str):
+    def say(self, name: str, intent: str | None = None):
         self.desk.log("", f"(caller says {name}.wav)")
+        if self.recorder:
+            self.recorder.label(name, intent)
         self.voice.extend(read(name))
 
     async def until_agent_speaks(self, timeout=30):
@@ -94,10 +105,12 @@ class Room:
             await asyncio.sleep(TICK)
 
 
-async def run(script: str, echo_gain: float = 0.0, before: bool = False, aec: bool | None = None, client=None) -> Room:
+async def run(script: str, echo_gain: float = 0.0, before: bool = False, aec: bool | None = None, client=None,
+              recorder: StereoRecorder | None = None) -> Room:
     """Play one script against the real API and return the room, with everything it heard.
 
-    The echo canceller is on when the room has echo (the agent is on speakers), unless aec says otherwise.
+    The echo canceller is on when the room has echo (the agent is on speakers), unless aec says otherwise. With a
+    recorder, the call is also written in stereo, the caller on the left and the agent on the right.
     """
     speaker = Speaker()
     aec = echo_gain > 0 if aec is None else aec
@@ -107,10 +120,10 @@ async def run(script: str, echo_gain: float = 0.0, before: bool = False, aec: bo
     async with connect() as ws:
         desk = (client or (Before if before else FrontDesk))(ws, speaker, echo)
         await desk.start()
-        room = Room(desk, speaker, echo_gain)
+        room = Room(desk, speaker, echo_gain, recorder)
         tasks = [asyncio.create_task(room.run()), asyncio.create_task(desk.listen())]
         await asyncio.sleep(0.5)
-        for i, (line, interrupt_after) in enumerate(SCRIPTS[script]):
+        for i, (line, interrupt_after, intent) in enumerate(SCRIPTS[script]):
             if i == 0:
                 pass  # the agent doesn't greet: the caller speaks first
             elif interrupt_after is None:
@@ -118,7 +131,7 @@ async def run(script: str, echo_gain: float = 0.0, before: bool = False, aec: bo
             else:
                 await room.until_agent_speaks()
                 await asyncio.sleep(interrupt_after)
-            room.say(line)
+            room.say(line, intent)
             await asyncio.sleep(len(read(line)) / (RATE * 2))
         await room.until_agent_done()
         for task in tasks:
