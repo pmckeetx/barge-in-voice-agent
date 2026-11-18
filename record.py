@@ -76,7 +76,8 @@ def compare(wav: Path, recorder: StereoRecorder) -> list[str]:
         if heard is None:
             line += "; no speech_started"
         else:
-            line += f"; speech_started arrived after {heard - o.onset_s:.2f} s (recording minus events {o.onset_s + o.talked_s - heard:+.2f} s)"
+            gap = round(o.onset_s + o.talked_s - heard, 2) + 0.0  # + 0.0 turns -0.0 into 0.0
+            line += f"; speech_started arrived after {heard - o.onset_s:.2f} s (recording minus events {gap:+.2f} s)"
         out.append(line)
     return out
 

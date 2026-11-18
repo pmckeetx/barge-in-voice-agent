@@ -124,3 +124,26 @@ def test_a_mono_file_is_refused(tmp_path):
         w.writeframes(bytes(RATE * 2))
     with pytest.raises(SystemExit, match="two-channel"):
         analyse(path)
+
+
+def test_the_cli_says_when_there_is_nothing_to_score(tmp_path, capsys, monkeypatch):
+    import bargein
+
+    wav = synth(tmp_path / "call.wav", agent=[(1.0, 3.78)], caller=[(3.0, 4.5)], agent_left=True)
+    monkeypatch.setattr("sys.argv", ["bargein.py", str(wav)])
+    bargein.main()
+    assert "pass --caller right" in capsys.readouterr().out
+
+
+def test_the_cli_warns_about_a_label_that_matched_nothing(tmp_path, capsys, monkeypatch):
+    import bargein
+
+    wav = synth(tmp_path / "call.wav", agent=[(1.0, 9.0)], caller=[(2.2, 2.7)])
+    labels = tmp_path / "labels.csv"
+    labels.write_text("onset_s,intent\n2.2,backchannel\n6.0,barge-in\n")
+    monkeypatch.setattr("sys.argv", ["bargein.py", str(wav), "--labels", str(labels)])
+    bargein.main()
+    out = capsys.readouterr().out
+    assert "Label at 6.0 s (barge-in) matched no caller burst" in out
+    assert "Label at 2.2" not in out
+

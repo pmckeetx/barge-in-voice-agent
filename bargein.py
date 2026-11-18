@@ -156,6 +156,15 @@ def main():
     parser.add_argument("--json", action="store_true", help="print one JSON object per overlap")
     args = parser.parse_args()
     overlaps = [o for wav in args.wavs for o in analyse(wav, args.caller, args.labels, args.agent_hangover)]
+    if not overlaps:
+        print("No overlaps: the caller never started while the agent was talking. If the agent is on the left, "
+              "pass --caller right.")
+        return
+    if args.labels:
+        for label in load_labels(args.wavs[0], args.labels):
+            if not any(o.intent == label["intent"] and 0 <= o.onset_s - label["onset_s"] <= 1.0 for o in overlaps):
+                print(f"Label at {label['onset_s']} s ({label['intent']}) matched no caller burst over the agent: "
+                      f"run without --labels to see where each burst starts.")
     for o in overlaps:
         if args.json:
             print(json.dumps(asdict(o)))
